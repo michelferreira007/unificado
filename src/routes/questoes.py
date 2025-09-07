@@ -6,7 +6,7 @@ import json
 
 questoes_bp = Blueprint('questoes', __name__)
 
-@questoes_bp.route('/questoes', methods=['GET'])
+@questoes_bp.route('/api/questoes', methods=['GET'])
 def get_questoes():
     """Buscar questões com filtros opcionais"""
     try:
@@ -79,7 +79,7 @@ def get_questoes():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/questoes/<int:questao_id>', methods=['GET'])
+@questoes_bp.route('/api/questoes/<int:questao_id>', methods=['GET'])
 def get_questao(questao_id):
     """Buscar uma questão específica"""
     try:
@@ -98,7 +98,7 @@ def get_questao(questao_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/questoes', methods=['POST'])
+@questoes_bp.route('/api/questoes', methods=['POST'])
 @login_required
 def create_questao():
     """Criar uma nova questão"""
@@ -121,7 +121,10 @@ def create_questao():
             idioma=data.get('idioma', 'Português'),
             conteudo_materia=data.get('conteudo_materia'),
             imagem_url=data.get('imagem_url'),
-            texto_base=data.get('texto_base')
+            texto_base=data.get('texto_base'),
+            tipo_questao=data.get('tipo_questao', 'multipla_escolha'),
+            alternativas_somatorias=json.dumps(data.get('alternativas_somatorias', [])),
+            resposta_somatoria=data.get('resposta_somatoria')
         )
         
         db.session.add(questao)
@@ -133,29 +136,32 @@ def create_questao():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/questoes/filtros', methods=['GET'])
+@questoes_bp.route('/api/questoes/filtros', methods=['GET'])
 def get_filtros():
     """Obter opções disponíveis para filtros"""
     try:
         # Parâmetros para filtragem dinâmica
         materia = request.args.get('materia')
         ano = request.args.get('ano', type=int)
+        vestibular = request.args.get('vestibular')
         
         # Query base
         query = Questao.query
         
-        # Aplicar filtros se fornecidos
+        # Aplicar filtros se fornecidos para filtragem dinâmica
         if materia and materia.lower() not in ['todas', 'todas as matérias', '']:
             query = query.filter(Questao.materia.ilike(f'%{materia}%'))
         if ano and ano != 0:
             query = query.filter(Questao.ano == ano)
+        if vestibular and vestibular.lower() not in ['todos', 'todos os vestibulares', '']:
+            query = query.filter(Questao.vestibular.ilike(f'%{vestibular}%'))
         
         # Obter valores únicos
         anos = db.session.query(Questao.ano.distinct()).filter(Questao.ano.isnot(None)).all()
         vestibulares = db.session.query(Questao.vestibular.distinct()).filter(Questao.vestibular.isnot(None)).all()
         materias = db.session.query(Questao.materia.distinct()).filter(Questao.materia.isnot(None)).all()
         
-        # Assuntos filtrados dinamicamente
+        # Assuntos filtrados dinamicamente baseados nos filtros aplicados
         assuntos = query.with_entities(Questao.assunto.distinct()).filter(Questao.assunto.isnot(None)).all()
         
         dificuldades = db.session.query(Questao.dificuldade.distinct()).filter(Questao.dificuldade.isnot(None)).all()
@@ -175,7 +181,7 @@ def get_filtros():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/progresso/questao', methods=['POST'])
+@questoes_bp.route('/api/progresso/questao', methods=['POST'])
 @login_required
 def salvar_progresso_questao():
     """Registrar progresso de uma questão"""
@@ -183,6 +189,11 @@ def salvar_progresso_questao():
         data = request.get_json()
         user_id = session['user_id']
         questao_id = data['questao_id']
+        
+        # Buscar a questão para verificar o tipo
+        questao = Questao.query.get(questao_id)
+        if not questao:
+            return jsonify({'error': 'Questão não encontrada'}), 404
         
         # Buscar progresso existente ou criar novo
         progresso = ProgressoQuestao.query.filter_by(
@@ -197,10 +208,22 @@ def salvar_progresso_questao():
             )
             db.session.add(progresso)
         
-        # Atualizar dados
-        progresso.respondida = data.get('respondida', False)
-        progresso.acertou = data.get('acertou')
-        progresso.resposta_usuario = data.get('resposta_usuario')
+        # Atualizar dados baseado no tipo de questão
+        progresso.respondida = data.get('respondida', True)
+        
+        if questao.tipo_questao == 'somatoria':
+            # Para questões somatórias
+            alternativas_selecionadas = data.get('alternativas_selecionadas', [])
+            soma_usuario = sum(alternativas_selecionadas)
+            
+            progresso.alternativas_selecionadas = json.dumps(alternativas_selecionadas)
+            progresso.resposta_usuario = str(soma_usuario)
+            progresso.acertou = (soma_usuario == questao.resposta_somatoria)
+        else:
+            # Para questões múltipla escolha
+            resposta_usuario = data.get('resposta_usuario')
+            progresso.resposta_usuario = resposta_usuario
+            progresso.acertou = (resposta_usuario == questao.resposta_correta)
         
         db.session.commit()
         
@@ -210,7 +233,7 @@ def salvar_progresso_questao():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/progresso/user/<int:user_id>', methods=['GET'])
+@questoes_bp.route('/api/progresso/user/<int:user_id>', methods=['GET'])
 @login_required
 def get_progresso_usuario(user_id):
     """Obter progresso de questões de um usuário"""
@@ -225,7 +248,7 @@ def get_progresso_usuario(user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/comentarios/questao/<int:questao_id>', methods=['POST'])
+@questoes_bp.route('/api/comentarios/questao/<int:questao_id>', methods=['POST'])
 @login_required
 def adicionar_comentario(questao_id):
     """Adicionar comentário a uma questão"""
@@ -247,7 +270,7 @@ def adicionar_comentario(questao_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/comentarios/questao/<int:questao_id>', methods=['GET'])
+@questoes_bp.route('/api/comentarios/questao/<int:questao_id>', methods=['GET'])
 def get_comentarios_questao(questao_id):
     """Obter comentários de uma questão"""
     try:
@@ -257,7 +280,7 @@ def get_comentarios_questao(questao_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/simulados', methods=['GET'])
+@questoes_bp.route('/api/simulados', methods=['GET'])
 def get_simulados():
     """Listar todos os simulados"""
     try:
@@ -266,7 +289,7 @@ def get_simulados():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/simulados', methods=['POST'])
+@questoes_bp.route('/api/simulados', methods=['POST'])
 @login_required
 def create_simulado():
     """Criar um novo simulado"""
@@ -289,7 +312,7 @@ def create_simulado():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/simulados/<int:simulado_id>', methods=['GET'])
+@questoes_bp.route('/api/simulados/<int:simulado_id>', methods=['GET'])
 def get_simulado(simulado_id):
     """Buscar um simulado específico com suas questões"""
     try:
@@ -304,7 +327,7 @@ def get_simulado(simulado_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/simulados/<int:simulado_id>/resultado', methods=['POST'])
+@questoes_bp.route('/api/simulados/<int:simulado_id>/resultado', methods=['POST'])
 @login_required
 def salvar_resultado_simulado(simulado_id):
     """Salvar resultado de um simulado"""
@@ -329,7 +352,7 @@ def salvar_resultado_simulado(simulado_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/simulados/resultados/user/<int:user_id>', methods=['GET'])
+@questoes_bp.route('/api/simulados/resultados/user/<int:user_id>', methods=['GET'])
 @login_required
 def get_resultados_usuario(user_id):
     """Buscar resultados de simulados de um usuário"""
@@ -344,7 +367,7 @@ def get_resultados_usuario(user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@questoes_bp.route('/estatisticas', methods=['GET'])
+@questoes_bp.route('/api/estatisticas', methods=['GET'])
 def get_estatisticas():
     """Obter estatísticas gerais do banco de questões"""
     try:

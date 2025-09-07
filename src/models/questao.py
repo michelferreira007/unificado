@@ -13,8 +13,14 @@ class Questao(db.Model):
     materia = db.Column(db.String(100))
     assunto = db.Column(db.String(200))
     enunciado = db.Column(db.Text, nullable=False)
-    alternativas = db.Column(db.Text)  # JSON string
-    resposta_correta = db.Column(db.String(10))
+    alternativas = db.Column(db.Text)  # JSON string para questões múltipla escolha
+    resposta_correta = db.Column(db.String(10))  # Para múltipla escolha
+    
+    # Campos para questões somatórias
+    alternativas_somatorias = db.Column(db.Text)  # JSON string com alternativas numeradas (01, 02, 04, 08, 16)
+    resposta_somatoria = db.Column(db.Integer)  # Soma das alternativas corretas
+    tipo_questao = db.Column(db.String(20), default='multipla_escolha')  # 'multipla_escolha' ou 'somatoria'
+    
     explicacao = db.Column(db.Text)
     dificuldade = db.Column(db.String(20))  # 'Fácil', 'Médio', 'Difícil'
     dia = db.Column(db.String(50))  # Para PAS-UEM
@@ -29,7 +35,7 @@ class Questao(db.Model):
         return f'<Questao {self.id} - {self.vestibular} {self.ano}>'
 
     def to_dict(self):
-        return {
+        data = {
             'id': self.id,
             'ano': self.ano,
             'vestibular': self.vestibular,
@@ -37,8 +43,6 @@ class Questao(db.Model):
             'materia': self.materia,
             'assunto': self.assunto,
             'enunciado': self.enunciado,
-            'alternativas': json.loads(self.alternativas) if self.alternativas else [],
-            'resposta_correta': self.resposta_correta,
             'explicacao': self.explicacao,
             'dificuldade': self.dificuldade,
             'dia': self.dia,
@@ -47,8 +51,18 @@ class Questao(db.Model):
             'conteudo_materia': self.conteudo_materia,
             'imagem_url': self.imagem_url,
             'texto_base': self.texto_base,
+            'tipo_questao': self.tipo_questao,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+        
+        if self.tipo_questao == 'somatoria':
+            data['alternativas_somatorias'] = json.loads(self.alternativas_somatorias) if self.alternativas_somatorias else []
+            data['resposta_somatoria'] = self.resposta_somatoria
+        else:
+            data['alternativas'] = json.loads(self.alternativas) if self.alternativas else []
+            data['resposta_correta'] = self.resposta_correta
+            
+        return data
 
 class ProgressoQuestao(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -56,7 +70,8 @@ class ProgressoQuestao(db.Model):
     questao_id = db.Column(db.Integer, db.ForeignKey('questao.id'), nullable=False)
     respondida = db.Column(db.Boolean, default=False)
     acertou = db.Column(db.Boolean)
-    resposta_usuario = db.Column(db.String(10))
+    resposta_usuario = db.Column(db.String(50))  # Para múltipla escolha ou soma para somatórias
+    alternativas_selecionadas = db.Column(db.Text)  # JSON string para questões somatórias
     data_resposta = db.Column(db.DateTime, default=datetime.utcnow)
 
     def __repr__(self):
@@ -70,6 +85,7 @@ class ProgressoQuestao(db.Model):
             'respondida': self.respondida,
             'acertou': self.acertou,
             'resposta_usuario': self.resposta_usuario,
+            'alternativas_selecionadas': json.loads(self.alternativas_selecionadas) if self.alternativas_selecionadas else [],
             'data_resposta': self.data_resposta.isoformat() if self.data_resposta else None
         }
 
